@@ -80,9 +80,14 @@ class SimpleUNetLayer:
         # Expansive path
 
         target_shape_u6 = (c4.shape[0], c4.shape[1], c4.shape[2])
-        u6 = upsample_with_padding(c5, kernel_initializer, target_shape_u6, strides=(2, 2, 2))
+        # u6 = upsample_with_padding(c5, kernel_initializer, target_shape_u6, strides=(2, 2, 2))
         # Add padding to match the dimensions of c4
+        # u6 = upsample_with_padding(c5, kernel_initializer, c4.shape, strides=(2, 2, 2))
+        u6 = upsample_with_padding(c5, kernel_initializer, (c4.shape[0] * 2, c4.shape[1] * 2, c4.shape[2] * 2),
+                                   strides=(2, 2, 2))
+
         pad_depth = c4.shape[0] - u6.shape[0]
+
         pad_height = c4.shape[1] - u6.shape[1]
         pad_width = c4.shape[2] - u6.shape[2]
         u6 = np.pad(u6, ((0, pad_depth), (0, pad_height), (0, pad_width), (0, 0)), mode='constant')
@@ -93,7 +98,8 @@ class SimpleUNetLayer:
         c6 = relu(c6)
 
         target_shape_u7 = (c3.shape[0], c3.shape[1], c3.shape[2])
-        u7 = upsample_with_padding(c6, kernel_initializer, target_shape_u7, strides=(2, 2, 2))
+        u7 = upsample_with_padding(c6, kernel_initializer, (c3.shape[0]*2, c3.shape[1]*2, c3.shape[2]*2), strides=(2, 2, 2))
+
         # Add padding to match the dimensions of c3
         pad_depth = c3.shape[0] - u7.shape[0]
         pad_height = c3.shape[1] - u7.shape[1]
@@ -106,7 +112,8 @@ class SimpleUNetLayer:
         c7 = relu(c7)
 
         target_shape_u8 = (c2.shape[0], c2.shape[1], c2.shape[2])
-        u8 = upsample_with_padding(c7, kernel_initializer, target_shape_u8, strides=(2, 2, 2))
+        u8 = upsample_with_padding(c7, kernel_initializer, (c2.shape[0]*2, c2.shape[1]*2, c2.shape[2]*2), strides=(2, 2, 2))
+
         # Add padding to match the dimensions of c2
         pad_depth = c2.shape[0] - u8.shape[0]
         pad_height = c2.shape[1] - u8.shape[1]
@@ -121,7 +128,8 @@ class SimpleUNetLayer:
 
         target_shape_u9 = (128, 128, 128)
         # u9 = upsample_with_padding(c8, kernel_initializer, target_shape_u9, strides=(2, 2, 2))
-        u9 = upsample_with_padding(c8, kernel_initializer, target_shape_u9, strides=(2, 2, 2))
+        u9 = upsample_with_padding(c8, kernel_initializer, (c1.shape[0]*2, c1.shape[1]*2, c1.shape[2]*2), strides=(2, 2, 2))
+
         # Add padding to match the dimensions of c1
         pad_depth = 128 - u9.shape[0]
         pad_height = 128 - u9.shape[1]
@@ -133,8 +141,10 @@ class SimpleUNetLayer:
         c9 = conv3d_transpose(c9, kernel_initializer)
         c9 = relu(c9)
 
-        outputs = conv3d(c9, np.ones((1, 1, 1, num_classes)))
-
+        # outputs = conv3d(c9, np.ones((1, 1, 1, num_classes)))
+        outputs = conv3d(c9, np.ones((1, 1, 1, 3)))  # Convolution with 3 input channels
+        zeros_channel = np.zeros(outputs.shape[:-1] + (1,))  # Creating a zeros channel with the desired shape
+        outputs = np.concatenate([outputs, zeros_channel], axis=-1)
         return outputs
 
     # def backward(self, gradients):
@@ -196,8 +206,8 @@ class SimpleUNetLayer:
                 pad_width = gradients.shape[2] - conv_result.shape[2]
                 padded_conv_result = np.pad(conv_result, ((0, pad_depth), (0, pad_height), (0, pad_width), (0, 0)),
                                             mode='constant')
-                if c < 3:
-                    propagated_gradients[..., c] += padded_conv_result[..., c % num_channels]
+                # if c < 3:
+                propagated_gradients[..., c] += padded_conv_result[..., c % num_channels]
 
         if self.prev_layer is not None:
             self.prev_layer.backward(propagated_gradients)
@@ -205,23 +215,39 @@ class SimpleUNetLayer:
     # Other methods like add_weight, forward, backward, etc.
 
 def conv3d(x, kernel):
-    _, _, _, in_channels = x.shape
+    result = np.zeros_like(x)
     kernel_depth, kernel_height, kernel_width, out_channels = kernel.shape
+    in_channels = x.shape[-1]
 
-    result_depth = x.shape[0] - kernel_depth + 1
-    result_height = x.shape[1] - kernel_height + 1
-    result_width = x.shape[2] - kernel_width + 1
-
-    result = np.zeros((result_depth, result_height, result_width, out_channels))
-
-    for d in range(result_depth):
-        for h in range(result_height):
-            for w in range(result_width):
-                x_slice = x[d:d + kernel_depth, h:h + kernel_height, w:w + kernel_width, :]
-                for c in range(out_channels):
-                    result[d, h, w, c] = np.sum(x_slice * kernel[:, :, :, c, np.newaxis])
+    for c in range(out_channels):
+        kernel_slice = kernel[:, :, :, c, np.newaxis]
+        for d in range(kernel_depth):
+            for h in range(kernel_height):
+                for w in range(kernel_width):
+                    result[ d:, h:, w:, :in_channels] += x[ d:, h:, w:, :in_channels] * kernel_slice[d, h, w, 0]
 
     return result
+
+
+
+# def conv3d(x, kernel):
+#     _, _, _, in_channels = x.shape
+#     kernel_depth, kernel_height, kernel_width, out_channels = kernel.shape
+#
+#     result_depth = x.shape[0] - kernel_depth + 1
+#     result_height = x.shape[1] - kernel_height + 1
+#     result_width = x.shape[2] - kernel_width + 1
+#
+#     result = np.zeros((result_depth, result_height, result_width, out_channels))
+#
+#     for d in range(result_depth):
+#         for h in range(result_height):
+#             for w in range(result_width):
+#                 x_slice = x[d:d + kernel_depth, h:h + kernel_height, w:w + kernel_width, :]
+#                 for c in range(out_channels):
+#                     result[d, h, w, c] = np.sum(x_slice * kernel[:, :, :, c, np.newaxis])
+#
+#     return result
 
 
 def conv3d_transpose(x, kernel, strides=(1, 1, 1), padding='same'):
@@ -254,7 +280,7 @@ def conv3d_transpose(x, kernel, strides=(1, 1, 1), padding='same'):
                               ]
 
                     # x_slice.shape[-1] == kernel.shape[-2]
-                    result[d, h, w, :] += np.sum(x_slice * kernel)
+                    result[d, h, w, :out_channels] += np.sum(x_slice * kernel)
 
     return result
 
